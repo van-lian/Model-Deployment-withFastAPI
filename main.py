@@ -20,13 +20,14 @@ class ObesityPredictor:
         # Load preprocessing components with error handling
         self.scalers_and_encoders = {}
         
+        MODEL_DIR = "model"
         preprocessing_files = {
-            'age_scaler': 'age_scaler.pkl',
-            'onehot_encoder': 'onehot_encoder.pkl',
-            'ordinal_encoder': 'ordinal_encoder.pkl',
-            'weight_scaler': 'weight_scaler.pkl',
-            'label_encoder': 'label_encoder.pkl',
-            'random_forest_model': 'random_forest_model.pkl'
+            'age_scaler': os.path.join(MODEL_DIR, 'age_scaler.pkl'),
+            'onehot_encoder': os.path.join(MODEL_DIR, 'onehot_encoder.pkl'),
+            'ordinal_encoder': os.path.join(MODEL_DIR, 'ordinal_encoder.pkl'),
+            'weight_scaler': os.path.join(MODEL_DIR, 'weight_scaler.pkl'),
+            'label_encoder': os.path.join(MODEL_DIR, 'label_encoder.pkl'),
+            'random_forest_model': os.path.join(MODEL_DIR, 'random_forest_model.pkl')
         }
         
         for name, filename in preprocessing_files.items():
