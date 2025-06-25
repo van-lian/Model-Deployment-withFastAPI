@@ -90,7 +90,7 @@ def user_input_form():
             }
             with st.spinner("Predicting using Azure model..."):
                 try:
-                    url = f"{FASTAPI_URL}/predict"
+                    url = f"{API_URL}/predict"
                     response = requests.post(url, json=input_data, timeout=30)
                     response.raise_for_status()
                     result = response.json()
