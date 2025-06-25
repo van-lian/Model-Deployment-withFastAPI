@@ -1,4 +1,5 @@
 from fastapi import FastAPI, HTTPException
+from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
 import pandas as pd
 import pickle
@@ -31,8 +32,6 @@ class ObesityPredictor:
                     self.components['onehot_encoder'].transform(df[onehot_cols]), 
                     columns=self.components['onehot_encoder'].get_feature_names_out(onehot_cols)
                 )
-                # Keep the original underscore format from training
-                print(f"[DEBUG] One-hot columns: {list(onehot_df.columns)}")
                 
                 df = df.drop(columns=onehot_cols)
                 df = pd.concat([df.reset_index(drop=True), onehot_df.reset_index(drop=True)], axis=1)
@@ -43,28 +42,18 @@ class ObesityPredictor:
             
             if len(present_ordinal_cols) == 2:
                 try:
-                    print(f"[DEBUG] Input values - CALC: {df['CALC'].iloc[0]}, CAEC: {df['CAEC'].iloc[0]}")
-                    
-                    # The ordinal encoder expects both columns together as it was trained
                     ordinal_transformed = self.components['ordinal_encoder'].transform(df[ordinal_cols])
                     df[ordinal_cols] = ordinal_transformed
-                    print(f"[DEBUG] Ordinal encoding successful")
                     
                 except Exception as e:
-                    print(f"[WARNING] Ordinal encoding failed: {e}")
-                    print(f"[INFO] Using manual encoding as fallback")
-                    
                     # Manual fallback encoding based on your training data
                     calc_mapping = {'no': 0, 'Sometimes': 1, 'Frequently': 2, 'Always': 3}
-                    caec_mapping = {'Sometimes': 0, 'Frequently': 1, 'no': 2, 'Always': 3}  # Based on your training order
+                    caec_mapping = {'Sometimes': 0, 'Frequently': 1, 'no': 2, 'Always': 3}
                     
                     df['CALC'] = df['CALC'].map(calc_mapping).fillna(0).astype(int)
                     df['CAEC'] = df['CAEC'].map(caec_mapping).fillna(0).astype(int)
-                    print(f"[DEBUG] Manual encoding - CALC: {df['CALC'].iloc[0]}, CAEC: {df['CAEC'].iloc[0]}")
-                    print(f"[DEBUG] Manual encoding - CALC shape: {df['CALC'].shape}, CAEC shape: {df['CAEC'].shape}")
                     
             else:
-                print(f"[WARNING] Missing ordinal columns. Present: {present_ordinal_cols}")
                 # Set default values for missing columns
                 for col in ordinal_cols:
                     if col not in df.columns:
@@ -78,32 +67,23 @@ class ObesityPredictor:
             
             # Align with expected features
             expected_features = self.components['expected_features']
-            print(f"[DEBUG] Current columns: {list(df.columns)}")
-            print(f"[DEBUG] Expected features: {expected_features}")
             
             # Add missing features with default values
             for feat in expected_features:
                 if feat not in df.columns:
                     df[feat] = 0
-                    print(f"[DEBUG] Added missing feature '{feat}' with value 0")
             
             # Remove extra columns and reorder to match expected features
             df = df[expected_features]
-            print(f"[DEBUG] Final DataFrame shape: {df.shape}")
-            print(f"[DEBUG] Final feature alignment complete")
             
             return df
             
         except Exception as e:
-            print(f"[ERROR] Preprocessing failed: {e}")
             raise HTTPException(status_code=400, detail=f"Preprocessing error: {str(e)}")
 
     def predict(self, data):
         X = self.preprocess(data)
-        print(f"[DEBUG] X shape before prediction: {X.shape}")
         pred = self.components['best_rf_model'].predict(X)
-        print(f"[DEBUG] Raw prediction: {pred}")
-        print(f"[DEBUG] Raw prediction shape: {pred.shape}")
         
         # The label_encoder is actually an OrdinalEncoder, so it needs 2D input
         try:
@@ -113,10 +93,8 @@ class ObesityPredictor:
                 pred_2d = pred
             
             result = self.components['label_encoder'].inverse_transform(pred_2d)[0][0]
-            print(f"[DEBUG] Final prediction: {result}")
             return result
         except Exception as e:
-            print(f"[ERROR] Label decoding failed: {e}")
             # Fallback: return the raw prediction
             return pred[0]
 
@@ -143,6 +121,15 @@ app = FastAPI(
     title="Obesity Prediction API", 
     description="API for predicting obesity levels based on lifestyle factors",
     version="1.0.0"
+)
+
+# Add CORS middleware for Streamlit access
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=["*"],  # In production, specify your Streamlit domain
+    allow_credentials=True,
+    allow_methods=["*"],
+    allow_headers=["*"],
 )
 
 # Initialize predictor
@@ -208,3 +195,9 @@ def model_info():
             "CAEC": ["no", "Sometimes", "Frequently", "Always"]
         }
     }
+
+# For Azure Web App
+if __name__ == "__main__":
+    import uvicorn
+    port = int(os.environ.get("PORT", 8000))
+    uvicorn.run(app, host="0.0.0.0", port=port)
