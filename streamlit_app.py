@@ -4,7 +4,7 @@ import os
 
 # Set your Azure Web App URL here
 # Replace 'your-webapp-name' with your actual Azure Web App name
-API_URL = os.getenv("API_URL", "https://your-webapp-name.azurewebsites.net")
+API_URL = os.getenv("API_URL", "model-dep-hpcscafbhgbcdnbe.canadacentral-01.azurewebsites.net")
 
 st.set_page_config(page_title="Obesity Prediction App (Azure)", page_icon="🍏", layout="centered")
 
