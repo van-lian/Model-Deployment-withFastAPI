@@ -1,6 +1,8 @@
 import streamlit as st
 import requests
 
+FASTAPI_URL = "model-deployment-c6ghcsfqdwbjd2bn.centralus-01.azurewebsites.net"
+
 st.set_page_config(page_title="Obesity Prediction App", page_icon="🍏", layout="centered")
 
 # Sidebar with instructions
