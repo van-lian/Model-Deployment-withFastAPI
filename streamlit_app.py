@@ -1,8 +1,10 @@
 import streamlit as st
 import requests
+import dotenv
+import os
 
-# Use the Azure FastAPI backend URL for deployment
-FASTAPI_URL = "https://model-deployment-c6ghcsfqdwbjd2bn.centralus-01.azurewebsites.net"
+dotenv.load_dotenv()
+api_url = os.getenv("API_URL")
 
 st.set_page_config(page_title="Obesity Prediction App (Azure)", page_icon="🍏", layout="centered")
 
@@ -103,3 +105,6 @@ def user_input_form():
                     st.error(f"Prediction failed: {e}")
 
 user_input_form()
+
+
+
