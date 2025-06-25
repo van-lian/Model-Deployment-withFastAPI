@@ -1,91 +1,124 @@
 from fastapi import FastAPI, HTTPException
 from pydantic import BaseModel
-import numpy as np
 import pandas as pd
 import pickle
-import uvicorn
 import os
 from typing import Optional
 
+MODEL_DIR = "models"
+
 class ObesityPredictor:
     def __init__(self):
-        # Load the main model
-        try:
-            with open('best_rf_model.pkl', 'rb') as f:
-                self.model = pickle.load(f)
-        except FileNotFoundError:
-            print("Warning: best_rf_model.pkl not found. Model will not work properly.")
-            self.model = None
-        
-        # Load preprocessing components with error handling
-        self.scalers_and_encoders = {}
-        
-        MODEL_DIR = "model"
-        preprocessing_files = {
-            'age_scaler': os.path.join(MODEL_DIR, 'age_scaler.pkl'),
-            'onehot_encoder': os.path.join(MODEL_DIR, 'onehot_encoder.pkl'),
-            'ordinal_encoder': os.path.join(MODEL_DIR, 'ordinal_encoder.pkl'),
-            'weight_scaler': os.path.join(MODEL_DIR, 'weight_scaler.pkl'),
-            'label_encoder': os.path.join(MODEL_DIR, 'label_encoder.pkl'),
-            'random_forest_model': os.path.join(MODEL_DIR, 'random_forest_model.pkl')
-        }
-        
-        for name, filename in preprocessing_files.items():
-            try:
-                if os.path.exists(filename):
-                    with open(filename, 'rb') as f:
-                        self.scalers_and_encoders[name] = pickle.load(f)
-                else:
-                    print(f"Warning: {filename} not found. Will skip this preprocessing step.")
-                    self.scalers_and_encoders[name] = None
-            except Exception as e:
-                print(f"Error loading {filename}: {e}")
-                self.scalers_and_encoders[name] = None
+        # Load all models and encoders
+        self.components = {}
+        for name in ['best_rf_model', 'age_scaler', 'weight_scaler', 'onehot_encoder', 
+                    'ordinal_encoder', 'label_encoder', 'expected_features']:
+            with open(os.path.join(MODEL_DIR, f'{name}.pkl'), 'rb') as f:
+                self.components[name] = pickle.load(f)
 
-    def preprocess(self, input_df):
-        """Preprocess the input dataframe"""
+    def preprocess(self, data):
         try:
-            # Scale numerical features if scalers are available
-            if self.scalers_and_encoders.get('age_scaler') is not None:
-                input_df['Age'] = self.scalers_and_encoders['age_scaler'].transform(input_df[['Age']])
+            df = pd.DataFrame([data])
             
-            if self.scalers_and_encoders.get('weight_scaler') is not None:
-                input_df['Weight'] = self.scalers_and_encoders['weight_scaler'].transform(input_df[['Weight']])
+            # Scale numerical features
+            df['Age'] = self.components['age_scaler'].transform(df[['Age']])
+            df['Weight'] = self.components['weight_scaler'].transform(df[['Weight']])
             
-            # Add other preprocessing steps here as needed
-            # For example, encoding categorical variables
+            # One-hot encode categorical features
+            onehot_cols = ['MTRANS', 'Gender']
+            if all(col in df.columns for col in onehot_cols):
+                onehot_df = pd.DataFrame(
+                    self.components['onehot_encoder'].transform(df[onehot_cols]), 
+                    columns=self.components['onehot_encoder'].get_feature_names_out(onehot_cols)
+                )
+                # Keep the original underscore format from training
+                print(f"[DEBUG] One-hot columns: {list(onehot_df.columns)}")
+                
+                df = df.drop(columns=onehot_cols)
+                df = pd.concat([df.reset_index(drop=True), onehot_df.reset_index(drop=True)], axis=1)
             
-            return input_df
+            # Ordinal encode CALC and CAEC using the combined encoder
+            ordinal_cols = ['CALC', 'CAEC']
+            present_ordinal_cols = [col for col in ordinal_cols if col in df.columns]
+            
+            if len(present_ordinal_cols) == 2:
+                try:
+                    print(f"[DEBUG] Input values - CALC: {df['CALC'].iloc[0]}, CAEC: {df['CAEC'].iloc[0]}")
+                    
+                    # The ordinal encoder expects both columns together as it was trained
+                    ordinal_transformed = self.components['ordinal_encoder'].transform(df[ordinal_cols])
+                    df[ordinal_cols] = ordinal_transformed
+                    print(f"[DEBUG] Ordinal encoding successful")
+                    
+                except Exception as e:
+                    print(f"[WARNING] Ordinal encoding failed: {e}")
+                    print(f"[INFO] Using manual encoding as fallback")
+                    
+                    # Manual fallback encoding based on your training data
+                    calc_mapping = {'no': 0, 'Sometimes': 1, 'Frequently': 2, 'Always': 3}
+                    caec_mapping = {'Sometimes': 0, 'Frequently': 1, 'no': 2, 'Always': 3}  # Based on your training order
+                    
+                    df['CALC'] = df['CALC'].map(calc_mapping).fillna(0).astype(int)
+                    df['CAEC'] = df['CAEC'].map(caec_mapping).fillna(0).astype(int)
+                    print(f"[DEBUG] Manual encoding - CALC: {df['CALC'].iloc[0]}, CAEC: {df['CAEC'].iloc[0]}")
+                    print(f"[DEBUG] Manual encoding - CALC shape: {df['CALC'].shape}, CAEC shape: {df['CAEC'].shape}")
+                    
+            else:
+                print(f"[WARNING] Missing ordinal columns. Present: {present_ordinal_cols}")
+                # Set default values for missing columns
+                for col in ordinal_cols:
+                    if col not in df.columns:
+                        df[col] = 0
+            
+            # Binary encode yes/no features
+            binary_cols = ['family_history_with_overweight', 'FAVC', 'SMOKE', 'SCC']
+            for col in binary_cols:
+                if col in df.columns:
+                    df[col] = df[col].map({'yes': 1, 'no': 0, 'Yes': 1, 'No': 0})
+            
+            # Align with expected features
+            expected_features = self.components['expected_features']
+            print(f"[DEBUG] Current columns: {list(df.columns)}")
+            print(f"[DEBUG] Expected features: {expected_features}")
+            
+            # Add missing features with default values
+            for feat in expected_features:
+                if feat not in df.columns:
+                    df[feat] = 0
+                    print(f"[DEBUG] Added missing feature '{feat}' with value 0")
+            
+            # Remove extra columns and reorder to match expected features
+            df = df[expected_features]
+            print(f"[DEBUG] Final DataFrame shape: {df.shape}")
+            print(f"[DEBUG] Final feature alignment complete")
+            
+            return df
+            
         except Exception as e:
-            print(f"Error in preprocessing: {e}")
-            return input_df
+            print(f"[ERROR] Preprocessing failed: {e}")
+            raise HTTPException(status_code=400, detail=f"Preprocessing error: {str(e)}")
 
     def predict(self, data):
-        """Make prediction on input data"""
-        if self.model is None:
-            raise ValueError("Model not loaded properly")
+        X = self.preprocess(data)
+        print(f"[DEBUG] X shape before prediction: {X.shape}")
+        pred = self.components['best_rf_model'].predict(X)
+        print(f"[DEBUG] Raw prediction: {pred}")
+        print(f"[DEBUG] Raw prediction shape: {pred.shape}")
         
+        # The label_encoder is actually an OrdinalEncoder, so it needs 2D input
         try:
-            # Convert input data to DataFrame
-            input_df = pd.DataFrame([data])
-            
-            # Preprocess the data
-            input_df = self.preprocess(input_df)
-            
-            # Make prediction
-            pred = self.model.predict(input_df)
-            
-            # Convert prediction back to label if encoder is available
-            if self.scalers_and_encoders.get('ord_enc_y') is not None:
-                pred_label = self.scalers_and_encoders['ord_enc_y'].inverse_transform(
-                    np.array(pred).reshape(-1, 1)
-                )[0][0]
+            if pred.ndim == 1:
+                pred_2d = pred.reshape(-1, 1)  # Convert 1D to 2D
             else:
-                pred_label = int(pred[0])
+                pred_2d = pred
             
-            return pred_label
+            result = self.components['label_encoder'].inverse_transform(pred_2d)[0][0]
+            print(f"[DEBUG] Final prediction: {result}")
+            return result
         except Exception as e:
-            raise ValueError(f"Error making prediction: {e}")
+            print(f"[ERROR] Label decoding failed: {e}")
+            # Fallback: return the raw prediction
+            return pred[0]
 
 class ObesityInput(BaseModel):
     Age: float
@@ -93,97 +126,85 @@ class ObesityInput(BaseModel):
     Height: float
     FCVC: float
     NCP: float
+    CH2O: Optional[float] = 2.0
     FAF: float
     TUE: float
-    family_history_with_overweight: str
-    FAVC: str
-    SMOKE: str
-    SCC: str
-    MTRANS: str
-    Gender: str
-    CALC: str
-    CAEC: str
+    family_history_with_overweight: str  # yes/no
+    FAVC: str  # yes/no
+    SMOKE: str  # yes/no
+    SCC: str  # yes/no
+    MTRANS: str  # transportation method
+    Gender: str  # Male/Female
+    CALC: str  # alcohol consumption frequency
+    CAEC: str  # eating between meals
 
 # Initialize FastAPI app
 app = FastAPI(
-    title="Obesity Prediction API",
-    description="API for predicting obesity levels based on lifestyle and physical attributes",
+    title="Obesity Prediction API", 
+    description="API for predicting obesity levels based on lifestyle factors",
     version="1.0.0"
 )
 
 # Initialize predictor
 try:
     predictor = ObesityPredictor()
-    print("Predictor initialized successfully")
+    model_loaded = True
 except Exception as e:
-    print(f"Error initializing predictor: {e}")
+    print(f"[ERROR] Failed to load model: {e}")
     predictor = None
+    model_loaded = False
 
-@app.get("/")
-def read_root():
-    """Root endpoint"""
-    return {"message": "Obesity Prediction API", "status": "running"}
-
-@app.get("/health")
-def health_check():
-    """Health check endpoint"""
+@app.get("/", tags=["Health"])
+def root():
     return {
-        "status": "healthy",
-        "model_loaded": predictor is not None and predictor.model is not None
+        "message": "Obesity Prediction API", 
+        "status": "running",
+        "endpoints": ["/predict", "/health"]
     }
 
-@app.post("/predict")
+@app.get("/health", tags=["Health"])
+def health():
+    return {
+        "status": "healthy" if model_loaded else "error",
+        "model_loaded": model_loaded
+    }
+
+@app.post("/predict", tags=["Prediction"])
 def predict_obesity(data: ObesityInput):
-    """Predict obesity level based on input features"""
-    if predictor is None or predictor.model is None:
-        raise HTTPException(
-            status_code=503, 
-            detail="Model not available. Please check if model files are present."
-        )
+    if not model_loaded:
+        raise HTTPException(status_code=503, detail="Model not loaded")
     
     try:
-        pred_label = predictor.predict(data.dict())
+        prediction = predictor.predict(data.dict())
         return {
-            "prediction": pred_label,
+            "prediction": prediction,
+            "confidence": "Model trained on lifestyle and demographic factors",
             "input_data": data.dict(),
             "status": "success"
         }
-    except ValueError as e:
-        raise HTTPException(status_code=400, detail=str(e))
     except Exception as e:
-        raise HTTPException(status_code=500, detail=f"Internal server error: {str(e)}")
+        raise HTTPException(status_code=400, detail=f"Prediction failed: {str(e)}")
 
-# Run the application
-if __name__ == "__main__":
-    import os
+@app.get("/model-info", tags=["Info"])
+def model_info():
+    if not model_loaded:
+        raise HTTPException(status_code=503, detail="Model not loaded")
     
-    # Check if model files exist
-    required_files = [
-        'age_scaler.pkl',
-        'onehot_encoder.pkl',
-        'ordinal_encoder.pkl',
-        'weight_scaler.pkl',              
-        'label_encoder.pkl',     
-        'random_forest_model.pkl'       
-    ]
-    
-    missing_files = [f for f in required_files if not os.path.exists(f)]
-    
-    if missing_files:
-        print("ERROR: Missing model files:")
-        for file in missing_files:
-            print(f"  - {file}")
-        print("\nPlease run model.py first to generate the model files.")
-        exit(1)
-    
-    print("Starting FastAPI server...")
-    print("API will be available at: http://localhost:8000")
-    print("API documentation at: http://localhost:8000/docs")
-    
-    uvicorn.run(
-        "main:app",  
-        host="0.0.0.0",
-        port=8000,
-        reload=True,
-        log_level="info"
-    )
+    return {
+        "model_type": "Random Forest",
+        "features_required": [
+            "Age", "Weight", "Height", "FCVC", "NCP", "CH2O", "FAF", "TUE",
+            "family_history_with_overweight", "FAVC", "SMOKE", "SCC", 
+            "MTRANS", "Gender", "CALC", "CAEC"
+        ],
+        "categorical_values": {
+            "family_history_with_overweight": ["yes", "no"],
+            "FAVC": ["yes", "no"],
+            "SMOKE": ["yes", "no"], 
+            "SCC": ["yes", "no"],
+            "Gender": ["Male", "Female"],
+            "MTRANS": ["Public_Transportation", "Walking", "Automobile", "Bike"],
+            "CALC": ["no", "Sometimes", "Frequently", "Always"],
+            "CAEC": ["no", "Sometimes", "Frequently", "Always"]
+        }
+    }
