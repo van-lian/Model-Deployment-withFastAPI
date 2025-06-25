@@ -1,10 +1,10 @@
 import streamlit as st
 import requests
-import dotenv
 import os
 
-dotenv.load_dotenv()
-API_URL = os.getenv("API_URL")
+# Set your Azure Web App URL here
+# Replace 'your-webapp-name' with your actual Azure Web App name
+API_URL = os.getenv("API_URL", "https://your-webapp-name.azurewebsites.net")
 
 st.set_page_config(page_title="Obesity Prediction App (Azure)", page_icon="🍏", layout="centered")
 
@@ -30,7 +30,23 @@ st.markdown("""
     </style>
 """, unsafe_allow_html=True)
 
+def check_api_health():
+    """Check if the API is running"""
+    try:
+        response = requests.get(f"{API_URL}/health", timeout=10)
+        return response.status_code == 200
+    except:
+        return False
+
 def user_input_form():
+    # Check API health first
+    if not check_api_health():
+        st.error(f"⚠️ Cannot connect to the API at {API_URL}. Please check if the service is running.")
+        st.info("Make sure your Azure Web App is deployed and running.")
+        return
+    else:
+        st.success("✅ Connected to Azure API")
+
     with st.form("obesity_form"):
         st.header("Personal & Demographic Information")
         col1, col2 = st.columns(2)
@@ -45,6 +61,7 @@ def user_input_form():
             SMOKE = st.selectbox("Do you smoke?", ["yes", "no"], help="Do you currently smoke?")
             SCC = st.selectbox("Do you monitor your calorie consumption? (SCC)", ["yes", "no"], help="Do you monitor your daily calorie intake?")
             FAVC = st.selectbox("Frequent high caloric food consumption (FAVC)", ["yes", "no"], help="Do you often eat high-calorie foods?")
+        
         st.markdown("---")
         st.header("Lifestyle & Eating Habits")
         col3, col4 = st.columns(2)
@@ -55,6 +72,7 @@ def user_input_form():
         with col4:
             FAF = st.number_input("Physical activity frequency (FAF)", min_value=0.0, max_value=3.0, value=1.0, help="How often do you exercise per week? (0-3)")
             TUE = st.number_input("Time using technology devices (TUE)", min_value=0.0, max_value=2.0, value=1.0, help="Average hours per day using technology devices.")
+        
         st.markdown("---")
         st.header("Eating & Drinking Habits")
         col5, col6 = st.columns(2)
@@ -62,12 +80,13 @@ def user_input_form():
             CALC = st.selectbox("Alcohol consumption (CALC)", ["no", "Sometimes", "Frequently", "Always"], help="How often do you consume alcohol?")
         with col6:
             CAEC = st.selectbox("Consumption of food between meals (CAEC)", ["no", "Sometimes", "Frequently", "Always"], help="How often do you eat between meals?")
+        
         st.markdown(":information_source: **All information is confidential and used only for prediction purposes.**")
         submitted = st.form_submit_button("Predict", use_container_width=True)
         reset = st.form_submit_button("Reset", use_container_width=True)
 
         if reset:
-            st.experimental_rerun()
+            st.rerun()
 
         if submitted:
             input_data = {
@@ -88,6 +107,7 @@ def user_input_form():
                 "CALC": CALC,
                 "CAEC": CAEC
             }
+            
             with st.spinner("Predicting using Azure model..."):
                 try:
                     url = f"{API_URL}/predict"
@@ -95,16 +115,22 @@ def user_input_form():
                     response.raise_for_status()
                     result = response.json()
                     prediction = result.get("prediction", "No result")
+                    
                     st.markdown(f"""
                     <div style='background: #222; padding: 20px 28px; border-radius: 12px; box-shadow: 0 2px 8px rgba(0,0,0,0.12); margin-top: 24px; max-width: 480px; margin-left: auto; margin-right: auto; border: 2px solid #228B22;'>
                         <h3 style='color:#cae00d; margin-bottom: 10px; font-size: 1.7rem;'>Prediction Result</h3>
                         <p style='font-size:1.3rem; color:#fff; font-weight:600; letter-spacing:1px; margin: 0;'>{prediction.replace('_', ' ')}</p>
                     </div>
                     """, unsafe_allow_html=True)
+                    
+                except requests.exceptions.RequestException as e:
+                    st.error(f"Connection error: {e}")
+                    st.info("Please check if your Azure Web App is running and accessible.")
                 except Exception as e:
                     st.error(f"Prediction failed: {e}")
 
 user_input_form()
 
-
-
+# Add footer with API info
+st.markdown("---")
+st.markdown(f"**API Endpoint:** `{API_URL}`")
