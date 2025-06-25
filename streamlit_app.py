@@ -4,7 +4,7 @@ import dotenv
 import os
 
 dotenv.load_dotenv()
-api_url = os.getenv("API_URL")
+API_URL = os.getenv("API_URL")
 
 st.set_page_config(page_title="Obesity Prediction App (Azure)", page_icon="🍏", layout="centered")
 
