@@ -1,7 +1,8 @@
 import streamlit as st
 import requests
 
-FASTAPI_URL = "model-deployment-c6ghcsfqdwbjd2bn.centralus-01.azurewebsites.net"
+# Use the Azure FastAPI backend URL for deployment
+FASTAPI_URL = "https://model-deployment-c6ghcsfqdwbjd2bn.centralus-01.azurewebsites.net"
 
 st.set_page_config(page_title="Obesity Prediction App", page_icon="🍏", layout="centered")
 
@@ -25,7 +26,7 @@ Enter your details below. All fields are required. The prediction result will ap
 # Grouped input form
 def user_input_form():
     with st.form("obesity_form"):
-        st.subheader("Personal Information")
+        st.subheader("Personal Information") 
         col1, col2 = st.columns(2)
         with col1:
             Age = st.number_input("Age", min_value=0.0, max_value=120.0, value=25.0, help="Enter your age in years.")
@@ -78,7 +79,7 @@ def user_input_form():
             }
             with st.spinner("Sending data to backend and waiting for prediction..."):
                 try:
-                    url = "http://localhost:8000/predict"
+                    url = f"{FASTAPI_URL}/predict"
                     response = requests.post(url, json=input_data)
                     if response.status_code == 200:
                         result = response.json()
