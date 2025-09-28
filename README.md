@@ -1,5 +1,2 @@
 # Model-Deployment-withFastAPI
-
-
-
-Streamlit App Link: https://model-deployment-c6ghcsfqdwbjd2bn.centralus-01.azurewebsites.net/
+In this project is we a Machine Learning pipeline, deployed using FastAPI as a backend API, and made a dashboard using Streamlit 
