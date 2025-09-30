@@ -6,7 +6,7 @@ import pickle
 import os
 from typing import Optional
 
-MODEL_DIR = "models"
+MODEL_DIR = "model"
 
 class ObesityPredictor:
     def __init__(self):

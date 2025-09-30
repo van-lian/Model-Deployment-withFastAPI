@@ -1,21 +1,85 @@
 import streamlit as st
-import requests
 import os
+import pandas as pd
+import pickle
 
-# Set your Azure Web App URL here
-# Replace 'your-webapp-name' with your actual Azure Web App name
-API_URL = os.getenv("API_URL", "model-dep-hpcscafbhgbcdnbe.canadacentral-01.azurewebsites.net")
+# Local model directory
+MODEL_DIR = os.path.join(os.path.dirname(__file__), "model")
 
-st.set_page_config(page_title="Obesity Prediction App (Azure)", page_icon="🍏", layout="centered")
+# Predictor (local)
+class ObesityPredictor:
+    def __init__(self):
+        self.components = {}
+        for name in ['best_rf_model', 'age_scaler', 'weight_scaler', 'onehot_encoder',
+                    'ordinal_encoder', 'label_encoder', 'expected_features']:
+            with open(os.path.join(MODEL_DIR, f'{name}.pkl'), 'rb') as f:
+                self.components[name] = pickle.load(f)
+
+    def preprocess(self, data):
+        df = pd.DataFrame([data])
+        df['Age'] = self.components['age_scaler'].transform(df[['Age']])
+        df['Weight'] = self.components['weight_scaler'].transform(df[['Weight']])
+
+        onehot_cols = ['MTRANS', 'Gender']
+        if all(col in df.columns for col in onehot_cols):
+            onehot_df = pd.DataFrame(
+                self.components['onehot_encoder'].transform(df[onehot_cols]),
+                columns=self.components['onehot_encoder'].get_feature_names_out(onehot_cols)
+            )
+            df = df.drop(columns=onehot_cols)
+            df = pd.concat([df.reset_index(drop=True), onehot_df.reset_index(drop=True)], axis=1)
+
+        ordinal_cols = ['CALC', 'CAEC']
+        present_ordinal_cols = [col for col in ordinal_cols if col in df.columns]
+        if len(present_ordinal_cols) == 2:
+            try:
+                ordinal_transformed = self.components['ordinal_encoder'].transform(df[ordinal_cols])
+                df[ordinal_cols] = ordinal_transformed
+            except Exception:
+                calc_mapping = {'no': 0, 'Sometimes': 1, 'Frequently': 2, 'Always': 3}
+                caec_mapping = {'Sometimes': 0, 'Frequently': 1, 'no': 2, 'Always': 3}
+                df['CALC'] = df['CALC'].map(calc_mapping).fillna(0).astype(int)
+                df['CAEC'] = df['CAEC'].map(caec_mapping).fillna(0).astype(int)
+        else:
+            for col in ordinal_cols:
+                if col not in df.columns:
+                    df[col] = 0
+
+        binary_cols = ['family_history_with_overweight', 'FAVC', 'SMOKE', 'SCC']
+        for col in binary_cols:
+            if col in df.columns:
+                df[col] = df[col].map({'yes': 1, 'no': 0, 'Yes': 1, 'No': 0})
+
+        expected_features = self.components['expected_features']
+        for feat in expected_features:
+            if feat not in df.columns:
+                df[feat] = 0
+        df = df[expected_features]
+        return df
+
+    def predict(self, data):
+        X = self.preprocess(data)
+        pred = self.components['best_rf_model'].predict(X)
+        try:
+            if pred.ndim == 1:
+                pred_2d = pred.reshape(-1, 1)
+            else:
+                pred_2d = pred
+            result = self.components['label_encoder'].inverse_transform(pred_2d)[0][0]
+            return result
+        except Exception:
+            return pred[0]
+
+st.set_page_config(page_title="Obesity Prediction App", page_icon="🍏", layout="centered")
 
 st.sidebar.title("About")
 st.sidebar.info(
     """
-    This app predicts obesity category based on your input data using a machine learning model deployed on Azure.\n\n- Fill in the form on the main page.\n- Click **Predict** to get the result.\n- The prediction is powered by a cloud-based machine learning model.
+    This app predicts obesity category based on your input data using a local machine learning model.\n\n- Fill in the form on the main page.\n- Click **Predict** to get the result.\n- The prediction runs locally.
     """
 )
 
-st.title("Obesity Prediction App (Azure)")
+st.title("Obesity Prediction App (Local)")
 st.write("""
 Enter your details below. All fields are required. The prediction result will appear after you click **Predict**.
 """)
@@ -30,23 +94,7 @@ st.markdown("""
     </style>
 """, unsafe_allow_html=True)
 
-def check_api_health():
-    """Check if the API is running"""
-    try:
-        response = requests.get(f"{API_URL}/health", timeout=10)
-        return response.status_code == 200
-    except:
-        return False
-
 def user_input_form():
-    # Check API health first
-    if not check_api_health():
-        st.error(f"⚠️ Cannot connect to the API at {API_URL}. Please check if the service is running.")
-        st.info("Make sure your Azure Web App is deployed and running.")
-        return
-    else:
-        st.success("✅ Connected to Azure API")
-
     with st.form("obesity_form"):
         st.header("Personal & Demographic Information")
         col1, col2 = st.columns(2)
@@ -108,29 +156,18 @@ def user_input_form():
                 "CAEC": CAEC
             }
             
-            with st.spinner("Predicting using Azure model..."):
+            with st.spinner("Predicting using local model..."):
                 try:
-                    url = f"{API_URL}/predict"
-                    response = requests.post(url, json=input_data, timeout=30)
-                    response.raise_for_status()
-                    result = response.json()
-                    prediction = result.get("prediction", "No result")
-                    
+                    predictor = ObesityPredictor()
+                    prediction = predictor.predict(input_data)
                     st.markdown(f"""
                     <div style='background: #222; padding: 20px 28px; border-radius: 12px; box-shadow: 0 2px 8px rgba(0,0,0,0.12); margin-top: 24px; max-width: 480px; margin-left: auto; margin-right: auto; border: 2px solid #228B22;'>
                         <h3 style='color:#cae00d; margin-bottom: 10px; font-size: 1.7rem;'>Prediction Result</h3>
                         <p style='font-size:1.3rem; color:#fff; font-weight:600; letter-spacing:1px; margin: 0;'>{prediction.replace('_', ' ')}</p>
                     </div>
                     """, unsafe_allow_html=True)
-                    
-                except requests.exceptions.RequestException as e:
-                    st.error(f"Connection error: {e}")
-                    st.info("Please check if your Azure Web App is running and accessible.")
                 except Exception as e:
                     st.error(f"Prediction failed: {e}")
 
 user_input_form()
 
-# Add footer with API info
-st.markdown("---")
-st.markdown(f"**API Endpoint:** `{API_URL}`")
