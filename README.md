@@ -36,10 +36,10 @@ Place the following files inside `model/`:
 ## Run the Streamlit app (local-only)
 
 ```bash
-streamlit run streamlit_app.py
+streamlit run app.py
 ```
 
-The app loads artifacts from `model/` and predicts locally. No cloud/Azure required.
+The app loads artifacts from `model/` and predicts locally. No cloud/Azure required. You can also run `streamlit_app.py` which presents a similar local UI.
 
 ## Optional: Run the FastAPI server
 
@@ -58,3 +58,13 @@ Endpoints:
 
 - The Streamlit app currently collects `Height` but the preprocessing uses the model’s `expected_features`. If `Height` was not used during training, it will be dropped when aligning to `expected_features`.
 - The stored `label_encoder` is an `OrdinalEncoder` and expects 2D arrays. Handled internally.
+
+## Streamlit Cloud deployment checklist
+
+- Main file: set to `app.py` in app settings
+- Python version: add `runtime.txt` with `python-3.11`
+- Ensure `model/` exists in the repo with these files:
+  - `best_rf_model.pkl`, `age_scaler.pkl`, `weight_scaler.pkl`, `onehot_encoder.pkl`, `ordinal_encoder.pkl`, `label_encoder.pkl`, `expected_features.pkl`
+- Avoid Git LFS for these small artifacts or enable LFS fetch in Streamlit
+- On first load, choose "Local" mode in the sidebar
+- For FastAPI mode, provide a public base URL (not localhost); the app checks `/health` and includes clear timeouts/errors

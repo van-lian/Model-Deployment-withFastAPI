@@ -3,17 +3,18 @@ import os
 import pandas as pd
 import pickle
 import requests
+from typing import List
 
 st.set_page_config(page_title="Obesity Prediction App (Local)", page_icon="🍏", layout="centered")
 
 st.sidebar.title("About")
 st.sidebar.info(
     """
-    This app predicts obesity category based on your input data using a local model.
+    This app predicts obesity category using a remote FastAPI backend.
     
     - Fill in the form on the main page.
-    - Click **Predict** to get the result.
-    - Runs entirely on Streamlit using artifacts in the `model/` folder.
+    - Click **Predict** to call the FastAPI `/predict` endpoint.
+    - Configure the backend URL below or via `FASTAPI_URL`.
     """
 )
 
@@ -29,14 +30,44 @@ if mode == "FastAPI":
             return r.ok
         except Exception:
             return False
-    if fastapi_url:
-        healthy = check_api_health(fastapi_url)
-        if healthy:
-            st.sidebar.success("Backend healthy")
-        else:
-            st.sidebar.warning("Backend not reachable")
+if fastapi_url:
+    healthy = check_api_health(fastapi_url)
+    if healthy:
+        st.sidebar.success("Backend healthy")
+    else:
+        st.sidebar.warning("Backend not reachable (check URL and /health)")
 
 MODEL_DIR = os.path.join(os.path.dirname(__file__), "model")
+
+REQUIRED_ARTIFACTS: List[str] = [
+    'best_rf_model.pkl',
+    'age_scaler.pkl',
+    'weight_scaler.pkl',
+    'onehot_encoder.pkl',
+    'ordinal_encoder.pkl',
+    'label_encoder.pkl',
+    'expected_features.pkl',
+]
+
+def list_missing_artifacts(model_dir: str) -> List[str]:
+    missing = []
+    for filename in REQUIRED_ARTIFACTS:
+        if not os.path.exists(os.path.join(model_dir, filename)):
+            missing.append(filename)
+    return missing
+
+# Artifact availability notice (for Local mode)
+missing_artifacts = list_missing_artifacts(MODEL_DIR)
+if mode == "Local":
+    if missing_artifacts:
+        st.sidebar.error("Missing model artifacts in `model/`:")
+        for f in missing_artifacts:
+            st.sidebar.code(f)
+        st.stop()
+
+@st.cache_resource(show_spinner=False)
+def get_predictor():
+    return ObesityPredictor()
 
 class ObesityPredictor:
     def __init__(self):
@@ -172,14 +203,22 @@ def user_input_form():
                             <p style='font-size:22px'><b>{prediction}</b></p>
                             </div>
                             """, unsafe_allow_html=True)
-                        except requests.exceptions.RequestException as e:
-                            st.error(f"Backend request failed: {e}")
+                        except requests.exceptions.Timeout:
+                            st.error("Backend request timed out (20s). Check server load/network.")
+                        except requests.exceptions.ConnectionError:
+                            st.error("Could not connect to backend. Verify the URL and that the server is running.")
+                        except requests.exceptions.HTTPError as e:
+                            try:
+                                detail = resp.json().get('detail', str(e))
+                            except Exception:
+                                detail = str(e)
+                            st.error(f"Backend returned an error: {detail}")
                         except Exception as e:
                             st.error(f"Prediction failed: {e}")
             else:
                 with st.spinner("Predicting using local model..."):
                     try:
-                        predictor = ObesityPredictor()
+                        predictor = get_predictor()
                         prediction = predictor.predict(input_data)
                         st.success("Prediction received!")
                         st.markdown(f"""
