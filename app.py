@@ -1,29 +1,86 @@
 import streamlit as st
-import requests
-
-# Use the local FastAPI backend URL for local deployment
-FASTAPI_URL = "http://127.0.0.1:8000"
+import os
+import pandas as pd
+import pickle
 
 st.set_page_config(page_title="Obesity Prediction App (Local)", page_icon="🍏", layout="centered")
 
-# Sidebar with instructions
 st.sidebar.title("About")
 st.sidebar.info(
     """
-    This app predicts obesity category based on your input data using a machine learning model (local backend).
+    This app predicts obesity category based on your input data using a local model.
     
     - Fill in the form on the main page.
     - Click **Predict** to get the result.
-    - The prediction is powered by a local FastAPI backend (http://127.0.0.1:8000).
+    - Runs entirely on Streamlit using artifacts in the `model/` folder.
     """
 )
 
-st.title("Obesity Prediction App (Local)")
-st.write("""
-Enter your details below. All fields are required. The prediction result will appear after you click **Predict**.
-""")
+MODEL_DIR = os.path.join(os.path.dirname(__file__), "model")
 
-# Grouped input form
+class ObesityPredictor:
+    def __init__(self):
+        self.components = {}
+        for name in ['best_rf_model', 'age_scaler', 'weight_scaler', 'onehot_encoder',
+                    'ordinal_encoder', 'label_encoder', 'expected_features']:
+            with open(os.path.join(MODEL_DIR, f'{name}.pkl'), 'rb') as f:
+                self.components[name] = pickle.load(f)
+
+    def preprocess(self, data):
+        df = pd.DataFrame([data])
+        df['Age'] = self.components['age_scaler'].transform(df[['Age']])
+        df['Weight'] = self.components['weight_scaler'].transform(df[['Weight']])
+
+        onehot_cols = ['MTRANS', 'Gender']
+        if all(col in df.columns for col in onehot_cols):
+            onehot_df = pd.DataFrame(
+                self.components['onehot_encoder'].transform(df[onehot_cols]),
+                columns=self.components['onehot_encoder'].get_feature_names_out(onehot_cols)
+            )
+            df = df.drop(columns=onehot_cols)
+            df = pd.concat([df.reset_index(drop=True), onehot_df.reset_index(drop=True)], axis=1)
+
+        ordinal_cols = ['CALC', 'CAEC']
+        present_ordinal_cols = [col for col in ordinal_cols if col in df.columns]
+        if len(present_ordinal_cols) == 2:
+            try:
+                ordinal_transformed = self.components['ordinal_encoder'].transform(df[ordinal_cols])
+                df[ordinal_cols] = ordinal_transformed
+            except Exception:
+                calc_mapping = {'no': 0, 'Sometimes': 1, 'Frequently': 2, 'Always': 3}
+                caec_mapping = {'Sometimes': 0, 'Frequently': 1, 'no': 2, 'Always': 3}
+                df['CALC'] = df['CALC'].map(calc_mapping).fillna(0).astype(int)
+                df['CAEC'] = df['CAEC'].map(caec_mapping).fillna(0).astype(int)
+        else:
+            for col in ordinal_cols:
+                if col not in df.columns:
+                    df[col] = 0
+
+        binary_cols = ['family_history_with_overweight', 'FAVC', 'SMOKE', 'SCC']
+        for col in binary_cols:
+            if col in df.columns:
+                df[col] = df[col].map({'yes': 1, 'no': 0, 'Yes': 1, 'No': 0})
+
+        expected_features = self.components['expected_features']
+        for feat in expected_features:
+            if feat not in df.columns:
+                df[feat] = 0
+        df = df[expected_features]
+        return df
+
+    def predict(self, data):
+        X = self.preprocess(data)
+        pred = self.components['best_rf_model'].predict(X)
+        try:
+            if pred.ndim == 1:
+                pred_2d = pred.reshape(-1, 1)
+            else:
+                pred_2d = pred
+            result = self.components['label_encoder'].inverse_transform(pred_2d)[0][0]
+            return result
+        except Exception:
+            return pred[0]
+
 def user_input_form():
     with st.form("obesity_form"):
         st.subheader("Personal Information")
@@ -57,7 +114,7 @@ def user_input_form():
         reset = st.form_submit_button("Reset")
 
         if reset:
-            st.experimental_rerun()
+            st.rerun()
 
         if submitted:
             input_data = {
@@ -77,22 +134,18 @@ def user_input_form():
                 "CALC": CALC,
                 "CAEC": CAEC
             }
-            with st.spinner("Sending data to backend and waiting for prediction..."):
+            with st.spinner("Predicting using local model..."):
                 try:
-                    url = f"{FASTAPI_URL}/predict"
-                    response = requests.post(url, json=input_data)
-                    if response.status_code == 200:
-                        result = response.json()
-                        st.success("Prediction received!")
-                        st.markdown(f"""
-                        <div style='background-color:#e6ffe6;padding:20px;border-radius:10px;'>
-                        <h3 style='color:#228B22;'>Prediction Result</h3>
-                        <p style='font-size:22px'><b>{result['prediction']}</b></p>
-                        </div>
-                        """, unsafe_allow_html=True)
-                    else:
-                        st.error(f"Error: {response.json()['detail']}")
+                    predictor = ObesityPredictor()
+                    prediction = predictor.predict(input_data)
+                    st.success("Prediction received!")
+                    st.markdown(f"""
+                    <div style='background-color:#e6ffe6;padding:20px;border-radius:10px;'>
+                    <h3 style='color:#228B22;'>Prediction Result</h3>
+                    <p style='font-size:22px'><b>{prediction}</b></p>
+                    </div>
+                    """, unsafe_allow_html=True)
                 except Exception as e:
-                    st.error(f"Failed to connect to backend: {e}")
+                    st.error(f"Prediction failed: {e}")
 
 user_input_form()
