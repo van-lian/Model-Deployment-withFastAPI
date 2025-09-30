@@ -2,6 +2,7 @@ import streamlit as st
 import os
 import pandas as pd
 import pickle
+import requests
 
 st.set_page_config(page_title="Obesity Prediction App (Local)", page_icon="🍏", layout="centered")
 
@@ -15,6 +16,25 @@ st.sidebar.info(
     - Runs entirely on Streamlit using artifacts in the `model/` folder.
     """
 )
+
+# Inference mode
+FASTAPI_URL_DEFAULT = os.getenv("FASTAPI_URL", "")
+mode = st.sidebar.radio("Inference mode", ["Local", "FastAPI"], index=0)
+fastapi_url = None
+if mode == "FastAPI":
+    fastapi_url = st.sidebar.text_input("FastAPI base URL", FASTAPI_URL_DEFAULT or "http://127.0.0.1:8000")
+    def check_api_health(base_url: str):
+        try:
+            r = requests.get(f"{base_url.rstrip('/')}/health", timeout=5)
+            return r.ok
+        except Exception:
+            return False
+    if fastapi_url:
+        healthy = check_api_health(fastapi_url)
+        if healthy:
+            st.sidebar.success("Backend healthy")
+        else:
+            st.sidebar.warning("Backend not reachable")
 
 MODEL_DIR = os.path.join(os.path.dirname(__file__), "model")
 
@@ -134,18 +154,41 @@ def user_input_form():
                 "CALC": CALC,
                 "CAEC": CAEC
             }
-            with st.spinner("Predicting using local model..."):
-                try:
-                    predictor = ObesityPredictor()
-                    prediction = predictor.predict(input_data)
-                    st.success("Prediction received!")
-                    st.markdown(f"""
-                    <div style='background-color:#e6ffe6;padding:20px;border-radius:10px;'>
-                    <h3 style='color:#228B22;'>Prediction Result</h3>
-                    <p style='font-size:22px'><b>{prediction}</b></p>
-                    </div>
-                    """, unsafe_allow_html=True)
-                except Exception as e:
-                    st.error(f"Prediction failed: {e}")
+            if mode == "FastAPI":
+                if not fastapi_url:
+                    st.error("Please provide a FastAPI base URL in the sidebar.")
+                else:
+                    with st.spinner("Calling FastAPI backend..."):
+                        try:
+                            url = f"{fastapi_url.rstrip('/')}/predict"
+                            resp = requests.post(url, json=input_data, timeout=20)
+                            resp.raise_for_status()
+                            result = resp.json()
+                            prediction = result.get("prediction", "No result")
+                            st.success("Prediction received!")
+                            st.markdown(f"""
+                            <div style='background-color:#e6ffe6;padding:20px;border-radius:10px;'>
+                            <h3 style='color:#228B22;'>Prediction Result</h3>
+                            <p style='font-size:22px'><b>{prediction}</b></p>
+                            </div>
+                            """, unsafe_allow_html=True)
+                        except requests.exceptions.RequestException as e:
+                            st.error(f"Backend request failed: {e}")
+                        except Exception as e:
+                            st.error(f"Prediction failed: {e}")
+            else:
+                with st.spinner("Predicting using local model..."):
+                    try:
+                        predictor = ObesityPredictor()
+                        prediction = predictor.predict(input_data)
+                        st.success("Prediction received!")
+                        st.markdown(f"""
+                        <div style='background-color:#e6ffe6;padding:20px;border-radius:10px;'>
+                        <h3 style='color:#228B22;'>Prediction Result</h3>
+                        <p style='font-size:22px'><b>{prediction}</b></p>
+                        </div>
+                        """, unsafe_allow_html=True)
+                    except Exception as e:
+                        st.error(f"Prediction failed: {e}")
 
 user_input_form()
