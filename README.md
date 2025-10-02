@@ -1,4 +1,4 @@
-# Obesity Prediction (Local Streamlit + optional FastAPI)
+# Obesity Prediction
 
 Local-first Streamlit app to predict obesity categories from lifestyle and demographic inputs using pre-trained models stored in `model/`.
 
